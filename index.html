@@ -1,0 +1,242 @@
+<!DOCTYPE html><html><head><title>Dynamic Color Gradient</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #canvas-container {
+            width: 100%;
+            max-width: 1200px;
+            aspect-ratio: 16/9;
+            position: relative;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 8px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+
+<base target="_self">
+
+
+    </head><body><div id="canvas-container"></div>
+    <div class="ui-panel">
+        <button id="palette-toggle">Toggle Palette</button>
+        <button id="ripple-btn">Add Ripple</button>
+        <button id="reset-zoom">Reset Zoom</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <script>
+        if (!WebGLRenderingContext) {
+            document.getElementById('canvas-container').innerHTML = 
+                '<div style="color: white; text-align: center; padding: 20px;">WebGL not supported. Please use a modern browser.</div>';
+            throw new Error('WebGL not supported');
+        }
+
+        let renderer, scene, camera, material;
+        let mouse = new THREE.Vector2(0.5, 0.5);
+        let zoom = 1.0;
+        let zoomTarget = 1.0;
+        let offset = new THREE.Vector2(0, 0);
+        let offsetTarget = new THREE.Vector2(0, 0);
+        let isVibrant = true;
+        let rippleTime = 0.0;
+        let ripplePosition = new THREE.Vector2(0.5, 0.5);
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            
+            // Scene setup
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            updateCanvasSize();
+            container.appendChild(renderer.domElement);
+
+            // Shader material
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    mouse: { value: mouse },
+                    resolution: { value: new THREE.Vector2() },
+                    vibrant: { value: isVibrant },
+                    rippleTime: { value: 0 },
+                    ripplePosition: { value: ripplePosition },
+                    zoom: { value: 1.0 },
+                    offset: { value: offset }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    precision highp float;
+                    uniform float time;
+                    uniform vec2 mouse;
+                    uniform vec2 resolution;
+                    uniform bool vibrant;
+                    uniform float rippleTime;
+                    uniform vec2 ripplePosition;
+                    uniform float zoom;
+                    uniform vec2 offset;
+                    varying vec2 vUv;
+
+                    #define PI 3.14159265359
+
+                    vec3 hsl2rgb(vec3 c) {
+                        vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0, 0.0, 1.0);
+                        return c.z + c.y * (rgb-0.5)*(1.0-abs(2.0*c.z-1.0));
+                    }
+
+                    void main() {
+                        vec2 uv = (vUv - 0.5) * zoom + offset + 0.5;
+                        
+                        // Ripple effect
+                        float ripple = smoothstep(0.2, 0.0, length(uv - ripplePosition) - rippleTime*0.2);
+                        uv += ripple * 0.1 * sin(rippleTime*10.0);
+                        
+                        // Color calculation
+                        vec3 color1 = hsl2rgb(vec3(
+                            time*0.1 + uv.x*0.5 + mouse.x*0.5,
+                            vibrant ? 0.8 : 0.4,
+                            0.5 + uv.y*0.3 + mouse.y*0.2
+                        ));
+                        
+                        vec3 color2 = hsl2rgb(vec3(
+                            time*0.1 + uv.y*0.3 + mouse.x*0.3,
+                            vibrant ? 0.7 : 0.3,
+                            0.6 - uv.x*0.2 + mouse.y*0.1
+                        ));
+                        
+                        vec3 finalColor = mix(color1, color2, sin(time + uv.x*PI*2.0)*0.5 + 0.5);
+                        finalColor += ripple * vec3(1.0, 0.8, 0.6);
+                        
+                        gl_FragColor = vec4(finalColor, 1.0);
+                    }
+                `
+            });
+
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+            scene.add(plane);
+
+            // Event listeners
+            window.addEventListener('resize', updateCanvasSize);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('wheel', onMouseWheel, { passive: false });
+            document.getElementById('palette-toggle').addEventListener('click', () => {
+                isVibrant = !isVibrant;
+                material.uniforms.vibrant.value = isVibrant;
+            });
+            document.getElementById('ripple-btn').addEventListener('click', () => {
+                rippleTime = 1.0;
+                ripplePosition.set(mouse.x, mouse.y);
+            });
+            document.getElementById('reset-zoom').addEventListener('click', () => {
+                zoomTarget = 1.0;
+                offsetTarget.set(0, 0);
+            });
+
+            animate();
+        }
+
+        function updateCanvasSize() {
+            const container = document.getElementById('canvas-container');
+            const width = Math.min(container.clientWidth, 1200);
+            const height = width * 9/16;
+            
+            renderer.setSize(width, height);
+            material.uniforms.resolution.value.set(width, height);
+        }
+
+        function onMouseMove(e) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = (e.clientX - rect.left) / rect.width;
+            mouse.y = 1.0 - (e.clientY - rect.top) / rect.height;
+        }
+
+        function onMouseWheel(e) {
+            e.preventDefault();
+            const delta = e.deltaY * -0.001;
+            const zoomFactor = 1.1;
+            const newZoom = zoomTarget * (delta > 0 ? zoomFactor : 1.0/zoomFactor);
+            zoomTarget = Math.min(Math.max(newZoom, 0.5), 4.0);
+            
+            const rect = renderer.domElement.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left) / rect.width;
+            const mouseY = 1.0 - (e.clientY - rect.top) / rect.height;
+            
+            offsetTarget.x += (mouseX - 0.5) * (1.0/zoomTarget - 1.0/zoom);
+            offsetTarget.y += (mouseY - 0.5) * (1.0/zoomTarget - 1.0/zoom);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Smooth zoom and offset
+            zoom += (zoomTarget - zoom) * 0.1;
+            offset.add(offsetTarget.clone().sub(offset).multiplyScalar(0.1));
+            
+            material.uniforms.time.value += 0.01;
+            material.uniforms.mouse.value = mouse;
+            material.uniforms.zoom.value = zoom;
+            material.uniforms.offset.value = offset;
+            
+            // Update ripple
+            if (rippleTime > 0) {
+                rippleTime -= 0.02;
+                material.uniforms.rippleTime.value = rippleTime;
+                material.uniforms.ripplePosition.value = ripplePosition;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+
+              
+          
+                
+          
+              
+</body></html>
